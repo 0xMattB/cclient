@@ -10,3 +10,5 @@ Improvement ideas:
 * Text colorization
 * Password hiding during input
 * Implementation of commands
+* "!exit" command closes local connection
+* "!terminate" command shuts down server
