@@ -2,6 +2,7 @@ pub mod modules;
 
 use modules::ip::IP;
 use modules::console;
+use modules::console::Color;
 use modules::command::{self, CommandType};
 
 use std::io;
@@ -26,6 +27,8 @@ pub async fn run(ip: &str) -> Result<(), Box<dyn Error>> {
 	let stdin_channel = spawn_stdin_channel();
 	let mut state = ClientState::LogIn;
 	let mut allow_read = true;
+	let mut user = String::default();
+	let mut save_username = true;
 	
 	loop {
 		match state {
@@ -34,13 +37,17 @@ pub async fn run(ip: &str) -> Result<(), Box<dyn Error>> {
 					if let Some(data) = receive(&mut stream).await {
 						allow_read = false;
 						
-						console::output(&format!["{data}"], false);
+						if data == "Username: " || data == "Password: " {
+							console::output(&format!["{data}"], false, Color::Yellow);
+						} else {
+							console::output(&format!["{data}"], false, Color::Default);
+						}
 						
 						if &data[0..=6] == "Invalid" {
-							console::output("", true);
+							console::output("", true, Color::Default);
 							state = ClientState::Disconnect;
 						} else if data == "Logged in" {
-							console::output("", true);
+							console::output("", true, Color::Default);
 							state = ClientState::LoggedIn;
 						}
 					}
@@ -50,6 +57,14 @@ pub async fn run(ip: &str) -> Result<(), Box<dyn Error>> {
 				match stdin_channel.try_recv() {
 					Ok(key) => {
 						allow_read = true;
+						
+						if save_username {
+							user = String::from(key.clone());
+							user = clean_string(&user);
+							user = trim_null(&user);
+							save_username = false;
+						}
+						
 						let _ = stream.write(key.as_bytes()).await;
 					},
 					Err(_) => {},
@@ -60,7 +75,11 @@ pub async fn run(ip: &str) -> Result<(), Box<dyn Error>> {
 				if let Some(data) = receive(&mut stream).await {
 					match command::command(&data) {
 						CommandType::None => {
-							console::output(&format!["{data}"], true);
+							if &data[0..=2] == "***" {
+								console::output(&format!["{data}"], true, Color::Blue);
+							} else {
+								print_formatted_broadcast(&data, &user);
+							}
 						},
 						CommandType::Exit => {
 							return Ok(());
@@ -77,7 +96,7 @@ pub async fn run(ip: &str) -> Result<(), Box<dyn Error>> {
 			},
 			
 			ClientState::Disconnect	=> {
-				console::output("Disconnected", true);
+				console::output("Disconnected", true, Color::Default);
 				break;
 			},
 		}
@@ -92,7 +111,7 @@ fn ip_get(ip_str: &str) -> IP {
 	match ip {
 		Ok(_) => {},
 		Err(e) => {
-			console::output(&format!["Error: {e}"], true);
+			console::output(&format!["Error: {e}"], true, Color::Default);
 			process::exit(0);
 		}
 	}
@@ -150,4 +169,20 @@ fn clean_string(s: &String) -> String {
 
 fn trim_null(s: &String) -> String {
 	String::from(s.trim_matches(char::from(0)))
+}
+
+fn print_formatted_broadcast(src: &str, username: &str) {
+	let mut color = Color::Green;
+	
+	if let Some(n) = src.find(":") {
+		if &src[0..n] == username {
+			color = Color::Red;
+		}
+		
+		let s1 = &src[0..=n];
+		let s2 = &src[n+1..];
+		
+		console::output(&format!["{s1}"], false, color);
+		console::output(&format!["{s2}"], true, Color::Default);
+	}
 }
