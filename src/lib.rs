@@ -2,17 +2,16 @@ pub mod modules;
 
 use modules::ip::IP;
 use modules::console;
+use modules::command::{self, CommandType};
+
+use std::io;
 use std::process;
+use std::error::Error;
+use std::thread;
+use std::sync::mpsc::{self, Receiver};
 
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
-
-use std::error::Error;
-use std::io;
-
-use std::sync::mpsc;
-use std::sync::mpsc::Receiver;
-use std::thread;
 
 enum ClientState {
 	LogIn,
@@ -24,34 +23,26 @@ pub async fn run(ip: &str) -> Result<(), Box<dyn Error>> {
 	let ip = ip_get(ip);
 
     let mut stream = TcpStream::connect(ip.get()).await?;
-    console::output("connected to server\n", true);
-	
 	let stdin_channel = spawn_stdin_channel();
 	let mut state = ClientState::LogIn;
-	let mut buf = vec![0; 1024];
 	let mut allow_read = true;
+	
 	loop {
-
 		match state {
 			ClientState::LogIn => {
 				if allow_read {
-					if let Ok(_n) = stream.try_read(&mut buf) { // TODO: if 'n' > 0?
+					if let Some(data) = receive(&mut stream).await {
 						allow_read = false;
-						let s = std::str::from_utf8(&buf).expect("Error converting buf to string");
-						let mut s = clean_string(&String::from(s));
-						s = trim_null(&s);
 						
-						console::output(&format!["{s}"], false);
+						console::output(&format!["{data}"], false);
 						
-						if &s[0..=6] == "Invalid" {
+						if &data[0..=6] == "Invalid" {
 							console::output("", true);
 							state = ClientState::Disconnect;
-						} else if s == "Logged in" {
+						} else if data == "Logged in" {
 							console::output("", true);
 							state = ClientState::LoggedIn;
 						}
-						
-						for i in 0..buf.len() { buf[i] = 0; }
 					}
 				}
 
@@ -64,13 +55,17 @@ pub async fn run(ip: &str) -> Result<(), Box<dyn Error>> {
 					Err(_) => {},
 				}
 			},
+			
 			ClientState::LoggedIn => {
-				if let Ok(_n) = stream.try_read(&mut buf) { // TODO: if 'n' > 0?
-					let s = std::str::from_utf8(&buf).expect("Error converting buf to string");
-					let s = clean_string(&String::from(s));
-
-					console::output(&format!["{s}"], true);
-					for i in 0..buf.len() { buf[i] = 0; }
+				if let Some(data) = receive(&mut stream).await {
+					match command::command(&data) {
+						CommandType::None => {
+							console::output(&format!["{data}"], true);
+						},
+						CommandType::Exit => {
+							return Ok(());
+						},
+					}	
 				}
 				
 				match stdin_channel.try_recv() {
@@ -80,6 +75,7 @@ pub async fn run(ip: &str) -> Result<(), Box<dyn Error>> {
 					Err(_) => {},
 				}
 			},
+			
 			ClientState::Disconnect	=> {
 				console::output("Disconnected", true);
 				break;
@@ -114,20 +110,42 @@ pub fn input() -> Result<String, &'static str> {
 	}
 }
 
-fn clean_string(s: &String) -> String {
-	let s = s.replace("\r", "\0");
-	let s = s.replace("\n", "\0");
-	s
-}
-
 fn spawn_stdin_channel() -> Receiver<String> {
     let (tx, rx) = mpsc::channel::<String>();
-    thread::spawn(move || loop {
+    
+	thread::spawn(move || loop {
         let mut buffer = String::new();
         io::stdin().read_line(&mut buffer).unwrap();
         tx.send(buffer).unwrap();
     });
-    rx
+    
+	rx
+}
+
+async fn receive(stream: &mut TcpStream) -> Option<String> {
+	let mut buf = vec![0; 1024];
+
+	if let Ok(_) = stream.try_read(&mut buf) {
+
+		let s = match std::str::from_utf8(&buf) {
+			Ok(v) => { v },
+			Err(_) => { return None; },
+		};
+			
+		let s = clean_string(&String::from(s));
+		let s = trim_null(&s);
+
+		return Some(s);
+	}
+
+	None
+}
+
+fn clean_string(s: &String) -> String {
+	let s = s.replace("\r", "\0");
+	let s = s.replace("\n", "\0");
+	
+	s
 }
 
 fn trim_null(s: &String) -> String {
