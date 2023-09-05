@@ -54,6 +54,7 @@ pub async fn run(ip: &str) -> Result<(), Box<dyn Error>> {
 						for i in 0..buf.len() { buf[i] = 0; }
 					}
 				}
+
 				
 				match stdin_channel.try_recv() {
 					Ok(key) => {
